@@ -279,6 +279,11 @@ public class LedgerValidator {
 
     public boolean updateDiff(Set<Hash> approvedHashes, final Map<Hash, Long> diff, Hash tip) throws Exception {
         if(!TransactionViewModel.fromHash(tangle, tip).isSolid()) {
+            //PN: NULL HASH means it the main tip...... from the co-ordinator.........
+            if(tip.equals(Hash.NULL_HASH)){
+                return true;
+            }
+
             return false;
         }
         if (approvedHashes.contains(tip)) {
