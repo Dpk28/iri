@@ -913,6 +913,11 @@ public class API {
             visitedHashes = new HashSet<>();
             diff = new HashMap<>();
             for (Hash tip : hashes) {
+
+                //PN:START
+                if(tip.equals(Hash.NULL_HASH)){
+                    continue;
+                }
                 if (!TransactionViewModel.exists(instance.tangle, tip)) {
                     return ErrorResponse.create("Tip not found: " + tip.toString());
                 }
