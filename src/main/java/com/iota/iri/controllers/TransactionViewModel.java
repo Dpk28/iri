@@ -454,4 +454,8 @@ public class TransactionViewModel {
     public String getSender() {
         return transaction.sender;
     }
+
+    public com.iota.iri.model.Transaction getTransaction(){
+        return transaction;
+    }
 }
