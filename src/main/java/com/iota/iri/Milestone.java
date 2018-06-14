@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.net.ssl.HttpsURLConnection;
 
+import com.iota.iri.conf.Configuration;
 import com.iota.iri.controllers.*;
 import com.iota.iri.hash.SpongeFactory;
 import com.iota.iri.zmq.MessageQ;
@@ -200,9 +201,11 @@ public class Milestone {
 
                     //final TransactionViewModel transactionViewModel2 = StorageTransactions.instance().loadTransaction(transactionViewModel.trunkTransactionPointer);
                     final TransactionViewModel transactionViewModel2 = transactionViewModel.getTrunkTransaction(tangle);
-                    if (transactionViewModel2.getType() == TransactionViewModel.FILLED_SLOT
+
+                    //PN: If the transaction is from the test net co-ordinator then skip other checks
+                    if (transactionViewModel.getTransaction().address.equals(new Hash(Configuration.TESTNET_COORDINATOR_ADDRESS)) || (transactionViewModel2.getType() == TransactionViewModel.FILLED_SLOT
                             && transactionViewModel.getBranchTransactionHash().equals(transactionViewModel2.getTrunkTransactionHash())
-                            && transactionViewModel.getBundleHash().equals(transactionViewModel2.getBundleHash())) {
+                            && transactionViewModel.getBundleHash().equals(transactionViewModel2.getBundleHash()))) {
 
                         final int[] trunkTransactionTrits = transactionViewModel.getTrunkTransactionHash().trits();
                         final int[] signatureFragmentTrits = Arrays.copyOfRange(transactionViewModel.trits(), TransactionViewModel.SIGNATURE_MESSAGE_FRAGMENT_TRINARY_OFFSET, TransactionViewModel.SIGNATURE_MESSAGE_FRAGMENT_TRINARY_OFFSET + TransactionViewModel.SIGNATURE_MESSAGE_FRAGMENT_TRINARY_SIZE);
