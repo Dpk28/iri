@@ -1,5 +1,6 @@
 package com.iota.iri;
 
+import com.iota.iri.conf.Configuration;
 import com.iota.iri.controllers.BundleViewModel;
 import com.iota.iri.hash.*;
 import com.iota.iri.model.Hash;
@@ -116,6 +117,13 @@ public class BundleValidator {
                         break;
 
                     } else {
+                        //PN: ADDED TO CHECK FOR NULL_HASH
+                        if (transactionViewModel.getTransaction().address.equals(new Hash(Configuration.TESTNET_COORDINATOR_ADDRESS)) ) {
+                            instanceTransactionViewModels.get(0).setValidity(tangle, 1);
+                            transactions.add(instanceTransactionViewModels);
+                            break;
+                        }
+
                         transactionViewModel = bundleTransactions.get(transactionViewModel.getTrunkTransactionHash());
                         if (transactionViewModel == null) {
                             break;

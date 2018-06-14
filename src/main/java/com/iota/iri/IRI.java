@@ -4,16 +4,30 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.core.util.StatusPrinter;
 import com.iota.iri.conf.Configuration;
 import com.iota.iri.conf.Configuration.DefaultConfSettings;
+import com.iota.iri.controllers.MilestoneViewModel;
+import com.iota.iri.hash.Curl;
+import com.iota.iri.hash.Sponge;
+import com.iota.iri.hash.SpongeFactory;
+import com.iota.iri.model.Hash;
 import com.iota.iri.service.API;
+import com.iota.iri.utils.Converter;
 import com.sanityinc.jargs.CmdLineParser;
 import com.sanityinc.jargs.CmdLineParser.Option;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
+
+import static com.iota.iri.controllers.TransactionViewModel.*;
+import static com.iota.iri.controllers.TransactionViewModel.BUNDLE_TRINARY_SIZE;
 
 /**
  * Main IOTA Reference Implementation starting class
@@ -30,6 +44,10 @@ public class IRI {
     public static IXI ixi;
     public static Configuration configuration;
     private static final String TESTNET_FLAG_REQUIRED = "--testnet flag must be turned on to use ";
+
+    //PN:co-ordinator thread
+    static Thread cooThread;
+    private static Boolean fireCoord;
 
     public static void main(final String[] args) throws IOException {
         configuration = new Configuration();
@@ -71,6 +89,15 @@ public class IRI {
             iota.init();
             api.init();
             ixi.init(configuration.string(Configuration.DefaultConfSettings.IXI_DIR));
+
+            //PN:- code to fire a co-ordinator in a seperate thread
+            if(fireCoord) {
+                log.debug("starting the co-ordinator thread");
+                cooThread = new Thread(spawnCoordinator(api, 60000), "Coordinator");
+                cooThread.start();
+                log.debug("CO_ORDINATOR THREAD STRAT SUBMITTED");
+            }
+
         } catch (final Exception e) {
             log.error("Exception during IOTA node initialisation: ", e);
             System.exit(-1);
@@ -116,7 +143,8 @@ public class IRI {
         final Option<Integer> milestoneStartIndex = parser.addIntegerOption("milestone-start");
         final Option<Integer> milestoneKeys = parser.addIntegerOption("milestone-keys");
         final Option<Long> snapshotTime = parser.addLongOption("snapshot-timestamp");
-
+        //PN: - added the co-ordinator option
+         final Option<Boolean> fireCoordinatorTxns = parser.addBooleanOption("co");
 
         try {
             assert args != null;
@@ -133,6 +161,9 @@ public class IRI {
             configuration.put(DefaultConfSettings.CONFIG, confFilePath);
             configuration.init();
         }
+
+        //PN: - read the co-ordintaor option
+        fireCoord=Optional.ofNullable(parser.getOptionValue(fireCoordinatorTxns)).orElse(Boolean.FALSE);
 
         //This block cannot be moved down
         final boolean isTestnet = Optional.ofNullable(parser.getOptionValue(testnet)).orElse(Boolean.FALSE)
@@ -326,4 +357,90 @@ public class IRI {
             }
         }, "Shutdown Hook"));
     }
+
+//PN:START - Thread that fires a co-ordinator if flag is set, easy to use for now,
+// but maybe at a later point take this code out  of IRI
+    static Runnable spawnCoordinator(API api, long spacing) {
+        return () -> {
+            long index = 0;
+            try {
+                newMilestone(api, new Hash[]{Hash.NULL_HASH, Hash.NULL_HASH}, ++index);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            while(true) {
+                try {
+                    Thread.sleep(spacing);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                try {
+                    sendMilestone(api, ++index);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        };
+    }
+
+    static private void newMilestone(API api, Hash[] tips, long index) throws Exception {
+        System.out.println("SENDING NEW MILESTONE FROM CO_ORDINATOR");
+        MilestoneViewModel milestoneViewModel = new MilestoneViewModel(configuration.integer(Configuration.DefaultConfSettings.MILESTONE_START_INDEX), Hash.NULL_HASH);
+        milestoneViewModel.store(iota.tangle);
+        System.out.println("AFTER ADDING THE MILESTONE TO TANGLE");
+        List<int[]> transactions = new ArrayList<>();
+        transactions.add(new int[TRINARY_SIZE]);
+        Converter.copyTrits(index, transactions.get(0), OBSOLETE_TAG_TRINARY_OFFSET, OBSOLETE_TAG_TRINARY_SIZE);
+        transactions.add(Arrays.copyOf(transactions.get(0), TRINARY_SIZE));
+        Hash coordinator = new Hash(Configuration.TESTNET_COORDINATOR_ADDRESS);
+        System.arraycopy(coordinator.trits(), 0, transactions.get(0), ADDRESS_TRINARY_OFFSET, ADDRESS_TRINARY_SIZE);
+        setBundleHash(transactions, null);
+        List<String> elements = api.attachToTangleStatement(tips[0], tips[1], 13, transactions.stream().map(Converter::trytes).collect(Collectors.toList()));
+        log.debug("SENDING NEW MILESTONE FROM CO_ORDINATOR ATTACHING TO TANGLE");
+        api.storeTransactionStatement(elements);
+        api.broadcastTransactionStatement(elements);
+    }
+
+    static private void sendMilestone(API api, long index) throws Exception {
+        log.debug("CALLING &&&&&&&&&& newMilestone(api, api.getTransactionToApproveStatement(10, null, 1), index);");
+        newMilestone(api, api.getTransactionToApproveStatement(10, null, 1), index);
+    }
+
+    static public void setBundleHash(List<int[]> transactions, Curl customCurl) {
+
+        int[] hash = new int[Curl.HASH_LENGTH];
+
+        Sponge curl = customCurl == null ? SpongeFactory.create(SpongeFactory.Mode.CURLP81) : customCurl;
+        curl.reset();
+
+        for (int i = 0; i < transactions.size(); i++) {
+            int[] t = Arrays.copyOfRange(transactions.get(i), ADDRESS_TRINARY_OFFSET, ADDRESS_TRINARY_OFFSET + ADDRESS_TRINARY_SIZE);
+
+            int[] valueTrits = Arrays.copyOfRange(transactions.get(i), VALUE_TRINARY_OFFSET, VALUE_TRINARY_OFFSET + VALUE_TRINARY_SIZE);
+            t = ArrayUtils.addAll(t, valueTrits);
+
+            int[] tagTrits = Arrays.copyOfRange(transactions.get(i), OBSOLETE_TAG_TRINARY_OFFSET, OBSOLETE_TAG_TRINARY_OFFSET + OBSOLETE_TAG_TRINARY_SIZE);
+            t = ArrayUtils.addAll(t, tagTrits);
+
+            int[] timestampTrits  = Arrays.copyOfRange(transactions.get(i), TIMESTAMP_TRINARY_OFFSET, TIMESTAMP_TRINARY_OFFSET + TIMESTAMP_TRINARY_SIZE);
+            t = ArrayUtils.addAll(t, timestampTrits);
+
+            Converter.copyTrits(i, transactions.get(i), CURRENT_INDEX_TRINARY_OFFSET, CURRENT_INDEX_TRINARY_SIZE);
+            int[] currentIndexTrits = Arrays.copyOfRange(transactions.get(i), CURRENT_INDEX_TRINARY_OFFSET, CURRENT_INDEX_TRINARY_OFFSET + CURRENT_INDEX_TRINARY_SIZE);
+            t = ArrayUtils.addAll(t, currentIndexTrits);
+
+            Converter.copyTrits(transactions.size(), transactions.get(i), LAST_INDEX_TRINARY_OFFSET, LAST_INDEX_TRINARY_SIZE);
+            int[] lastIndexTrits = Arrays.copyOfRange(transactions.get(i), LAST_INDEX_TRINARY_OFFSET, LAST_INDEX_TRINARY_OFFSET + LAST_INDEX_TRINARY_SIZE);
+            t = ArrayUtils.addAll(t, lastIndexTrits);
+
+            curl.absorb(t, 0, t.length);
+        }
+
+        curl.squeeze(hash, 0, hash.length);
+
+        for (int i = 0; i < transactions.size(); i++) {
+            System.arraycopy(hash, 0, transactions.get(i), BUNDLE_TRINARY_OFFSET, BUNDLE_TRINARY_SIZE);
+        }
+    }
+    //PN:END
 }
